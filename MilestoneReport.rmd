@@ -1,0 +1,188 @@
+---
+title: "Data Science Capstone: Milestone Report"
+author: "DraganP"
+date: "Sunday, March 20, 2016"
+output: html_document
+---
+
+##Overview
+
+This is the Milestone Report for the Data Science Capstone course. There are three tasks to be addressed in thhis report:
+1. Demonstrate Understanding of the Problem
+2. Get and Clean the Data
+3. Perform Exploratory Data Analysis
+
+The main source of information for the approach taken to create this report was the article "Text Mining Infrastructure in R" by I. Feinerer, K. Hornik and D. Meyer, Journal of Statistical Software, Vol. 25 Issue 5, March 2008. (www.jstatsoft.org)
+
+##Obtain, Load, and Inspect the Data
+
+Per the instructions, the dataset for this project was downloaded from https://d396qusza40orc.cloudfront.net/dsscapstone/dataset/Coursera-SwiftKey.zip and the files were saved locally as .txt files.
+
+First we will load all the necessary libraries to be used for this project:
+
+```{r, warning=FALSE, message=FALSE}
+library(tm); library(stringi); library(Matrix); library(slam); library(R.utils); library(RWeka); library(SnowballC); library(ggplot2); library(dplyr)
+```
+
+Load the data from the three files, i.e. blogs, news, and twitter:
+
+```{r, warning=FALSE}
+blogCon <- file("en_US.blogs.txt", "r"); blogs <- readLines(blogCon, encoding="UTF-8"); close(blogCon);
+newsCon <- file("en_US.news.txt", "r"); news <- readLines(newsCon, encoding="UTF-8"); close(newsCon);
+twitterCon <- file("en_US.twitter.txt", "r"); twitter <- readLines(twitterCon, encoding="UTF-8"); close(twitterCon)
+```
+
+Since we will need to exclude profane words from the analysis, we need to obtain a list of profane words. We obtained a file with over 450 profane words from github: https://gist.github.com/ryanlewis/a37739d710ccdb4b406d, and then saved it locally as the en_US.ProfaneWOrds.txt file. We will load it the same way as the other three files:
+
+```{r, warning=FALSE}
+pwCon <- file("en_US.ProfaneWords.txt", "r"); ProfaneWords <- readLines(pwCon, encoding="UTF-8"); close(pwCon)
+```
+
+To obtain basic information about the data, we will perform line counts of the three files:
+
+```{r}
+lineCount <- data.frame(length(blogs), length(news), length(twitter));
+colnames(lineCount) <- c("blogs", "news", "twitter"); lineCount
+```
+
+##Sample the Data
+
+We will create a 1% sample of the data by setting the seed for reproducibility and by using the sample function from the base package. We then combine the samples from the three source files into one dataSample.txt file and save it to the same directory as the source files.
+
+```{r}
+set.seed(9567);
+blogsSample <- sample(blogs, size=round(length(blogs)*.01)); newsSample <- sample(news, size=round(length(news)*.01)); twitterSample <- sample(twitter, size=round(length(twitter)*.01))
+dataSample <- c(blogsSample, newsSample, twitterSample);
+writeLines(dataSample, "dataSample.txt")
+```
+
+To free up computer memory, we will remove temporary variables:
+
+```{r}
+rm(twitter,news,blogs,twitterSample,newsSample,blogsSample)
+```
+
+##Data Corpus
+
+We will create a Corpus or Text Document Collection, which provides the framework for efficiently managing and working with text documents, including the storing of metadata.
+
+```{r}
+dataCorpus <- Corpus(VectorSource(dataSample), readerControl=list(reader=readPlain, language="en_US", load=TRUE))
+```
+
+##Clean the Data
+
+We will perform several data cleaning operations which will prepare the data for more efficient analysis and modeling. The operations we will perform are:
+- Convert to lowercase
+- Remove characters /, @, \\
+- Remove punctuation
+- Remove numbers
+- Remove English stop words
+- Remove profanities
+- Strip whitespace
+- Initialize stemming (Porter's stemming)
+
+```{r, error=TRUE}
+doc <- dataCorpus;
+doc <- tm_map(doc, content_transformer(tolower));
+toSpace <- content_transformer(function(x, pattern) gsub(pattern, " ", x));
+doc <- tm_map(doc, toSpace, "/|@|\\|");
+doc <- tm_map(doc, removePunctuation);
+doc <- tm_map(doc, removeNumbers);
+doc <- tm_map(doc, removeWords, stopwords("english"));
+doc <- tm_map(doc, removeWords, ProfaneWords);
+doc <- tm_map(doc, stripWhitespace);
+doc <- tm_map(doc, stemDocument, language = "english")
+```
+
+##Tokenize the Data and Create N-grams
+
+We will tokenize the dataCorpus created from the dataSample document into 1-gram, 2-gram, and 3-gram chunks, i.e. word groupings. From that we will create term-document matrices using the RWeka library. Term-document matrices will give us frequencies of those N-grams, i.e. 1-, 2-, and 3-word groupings.
+
+```{r}
+UnigramTokenizer <- function(x) NGramTokenizer(x, Weka_control(min = 1, max = 1));
+unitdm <- TermDocumentMatrix(doc, control = list(tokenize = UnigramTokenizer));
+BigramTokenizer <- function(x) NGramTokenizer(x, Weka_control(min = 2, max = 2));
+bitdm <- TermDocumentMatrix(doc, control = list(tokenize = BigramTokenizer));
+TrigramTokenizer <- function(x) NGramTokenizer(x, Weka_control(min = 3, max = 3));
+tritdm <- TermDocumentMatrix(doc, control = list(tokenize = TrigramTokenizer))
+```
+
+##Exploratory Analysis: Frequencies of Words and Word Pairs
+
+We will summarize rows of the three term-document matrices in order to obtain frequency count. We will use rollup function from the tm package, since it is much more efficient than the colSums function from the base package. We could not use colSums on our computer (Windows 8.1. with 8GB of RAM) to summarize 2-gram and 3-gram matrices as we were getting integer overflow errors.
+
+```{r}
+tm_unifreq <- as.matrix(rollup(unitdm, 2, FUN=sum));
+# Row sum for large term-document matrix / simple_triplet_matrix {tm package}
+top_unifreq <- sort(rowSums(tm_unifreq), decreasing=TRUE);
+# Sort row sum, also converts from matrix to numeric
+tm_uniwordfreq <- data.frame(word=names(top_unifreq), freq=top_unifreq);
+# Converts numeric to a data frame which we need to create a bar chart
+```
+
+```{r}
+tm_bifreq <- as.matrix(rollup(bitdm, 2, FUN=sum));
+top_bifreq <- sort(rowSums(tm_bifreq), decreasing=TRUE);
+tm_biwordfreq <- data.frame(word=names(top_bifreq), freq=top_bifreq)
+```
+
+```{r}
+tm_trifreq <- as.matrix(rollup(tritdm, 2, FUN=sum));
+top_trifreq <- sort(rowSums(tm_trifreq), decreasing=TRUE);
+tm_triwordfreq <- data.frame(word=names(top_trifreq), freq=top_trifreq)
+```
+
+Unigrams - Top 10 highest frequencies:
+```{r}
+top_unifreq[1:10]
+```
+
+Bigrams - Top 10 highest frequencies:
+```{r}
+top_bifreq[1:10]
+```
+
+Trigrams - Top 10 highest frequencies:
+```{r}
+top_trifreq[1:10]
+```
+
+We will create bar charts showing the most frequent 1-, 2-, and 3-grams from the sample data set. 
+
+###1-grams with frequencies > 1000
+```{r, echo=FALSE}
+tm_uniwordfreq %>% 
+    filter(freq > 1000) %>%
+    ggplot(aes(word,freq)) +
+    geom_bar(stat="identity", fill = "blue") +
+    ggtitle("Unigrams with Frequencies over 1000") +
+    xlab("Unigram") + ylab("Frequency") +
+    theme(axis.text.x=element_text(angle=45, hjust=1, size = 12))
+```
+
+###2-grams with frequencies > 120
+```{r, echo=FALSE}
+tm_biwordfreq %>% 
+    filter(freq > 120) %>%
+    ggplot(aes(word,freq)) +
+    geom_bar(stat="identity", fill = "red") +
+    ggtitle("Bigrams with Frequencies over 120") +
+    xlab("Bigram") + ylab("Frequency") +
+    theme(axis.text.x=element_text(angle=45, hjust=1, size = 12))
+```
+
+###3-grams with frequencies > 15
+```{r, echo=FALSE}
+tm_triwordfreq %>% 
+    filter(freq > 15) %>%
+    ggplot(aes(word,freq)) +
+    geom_bar(stat="identity", fill = "green") +
+    ggtitle("Bigrams with Frequencies over 15") +
+    xlab("Trigram") + ylab("Frequency") +
+    theme(axis.text.x=element_text(angle=45, hjust=1, size = 12))
+```
+
+##Conclusion / Next Steps
+
+This is the end of the exploratory analysis. In the next phase of the Capstone project we will build the prediction model based on the concepts shown in this report.
